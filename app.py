@@ -10,6 +10,20 @@ from flask import Flask, after_this_request, jsonify, render_template, request, 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", os.urandom(24))
 
+_YT_COOKIE_FILE = None
+
+def _init_cookies():
+    global _YT_COOKIE_FILE
+    raw = os.environ.get("YOUTUBE_COOKIES", "").strip()
+    if raw:
+        import tempfile as tf
+        f = tf.NamedTemporaryFile(mode="w", suffix=".txt", delete=False)
+        f.write(raw)
+        f.close()
+        _YT_COOKIE_FILE = f.name
+
+_init_cookies()
+
 
 def detect_platform(url: str):
     url = url.strip()
@@ -55,11 +69,13 @@ def _ydl_opts(extra: dict = {}) -> dict:
 
 
 def _ydl_opts_youtube(extra: dict = {}) -> dict:
-    # Le client iOS contourne la détection de bot de YouTube
-    return _ydl_opts({
+    opts = {
         "extractor_args": {"youtube": {"player_client": ["ios"]}},
         **extra,
-    })
+    }
+    if _YT_COOKIE_FILE:
+        opts["cookiefile"] = _YT_COOKIE_FILE
+    return _ydl_opts(opts)
 
 
 def _ydl_info(url: str, platform: str) -> dict:
