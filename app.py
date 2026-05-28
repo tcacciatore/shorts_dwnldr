@@ -1,3 +1,4 @@
+import json
 import os
 import re
 import shutil
@@ -11,10 +12,17 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 
 app = Flask(__name__)
-app.secret_key = os.urandom(24)
+app.secret_key = os.environ.get("SECRET_KEY", os.urandom(24))
 
 SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
-CLIENT_SECRETS = os.path.join(os.path.dirname(__file__), "client_secrets.json")
+
+def _get_client_config() -> dict:
+    raw = os.environ.get("GOOGLE_CLIENT_SECRETS")
+    if raw:
+        return json.loads(raw)
+    path = os.path.join(os.path.dirname(__file__), "client_secrets.json")
+    with open(path) as f:
+        return json.load(f)
 
 
 def detect_platform(url: str):
@@ -87,13 +95,16 @@ def _yt_download(url: str, tmpdir: str) -> str:
 # ── Instagram / TikTok via yt-dlp ────────────────────────────────────────────
 
 def _ydl_opts(extra: dict = {}) -> dict:
-    return {
+    opts = {
         "quiet": True,
         "no_warnings": True,
-        "cookiesfrombrowser": ("chrome",),
         "source_address": "0.0.0.0",
         **extra,
     }
+    # En local, on peut utiliser les cookies Chrome pour les sites qui requièrent une auth
+    if os.environ.get("USE_BROWSER_COOKIES", "").lower() == "1":
+        opts["cookiesfrombrowser"] = ("chrome",)
+    return opts
 
 
 def _ydl_info(url: str) -> dict:
@@ -179,7 +190,7 @@ def api_download():
 
 @app.route("/auth/login")
 def auth_login():
-    flow = Flow.from_client_secrets_file(CLIENT_SECRETS, scopes=SCOPES,
+    flow = Flow.from_client_config(_get_client_config(), scopes=SCOPES,
                                          redirect_uri=url_for("auth_callback", _external=True))
     auth_url, state = flow.authorization_url(prompt="consent")
     session["oauth_state"] = state
@@ -188,7 +199,7 @@ def auth_login():
 
 @app.route("/auth/callback")
 def auth_callback():
-    flow = Flow.from_client_secrets_file(CLIENT_SECRETS, scopes=SCOPES,
+    flow = Flow.from_client_config(_get_client_config(), scopes=SCOPES,
                                          state=session["oauth_state"],
                                          redirect_uri=url_for("auth_callback", _external=True))
     flow.fetch_token(authorization_response=request.url)
@@ -264,4 +275,5 @@ def api_republish():
 
 if __name__ == "__main__":
     os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"
-    app.run(debug=False, port=5001)
+    port = int(os.environ.get("PORT", 5001))
+    app.run(debug=False, port=port)
