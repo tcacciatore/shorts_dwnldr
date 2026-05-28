@@ -1,4 +1,3 @@
-import json
 import os
 import re
 import shutil
@@ -6,23 +5,10 @@ import tempfile
 import threading
 
 import yt_dlp
-from flask import Flask, after_this_request, jsonify, redirect, render_template, request, send_file, session, url_for
-from google_auth_oauthlib.flow import Flow
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaFileUpload
+from flask import Flask, after_this_request, jsonify, render_template, request, send_file
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", os.urandom(24))
-
-SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
-
-def _get_client_config() -> dict:
-    raw = os.environ.get("GOOGLE_CLIENT_SECRETS")
-    if raw:
-        return json.loads(raw)
-    path = os.path.join(os.path.dirname(__file__), "client_secrets.json")
-    with open(path) as f:
-        return json.load(f)
 
 
 def detect_platform(url: str):
@@ -186,94 +172,7 @@ def api_download():
         return jsonify({"error": str(exc)}), 500
 
 
-# ── Auth YouTube ─────────────────────────────────────────────────────────────
-
-@app.route("/auth/login")
-def auth_login():
-    flow = Flow.from_client_config(_get_client_config(), scopes=SCOPES,
-                                         redirect_uri=url_for("auth_callback", _external=True))
-    auth_url, state = flow.authorization_url(prompt="consent")
-    session["oauth_state"] = state
-    return redirect(auth_url)
-
-
-@app.route("/auth/callback")
-def auth_callback():
-    flow = Flow.from_client_config(_get_client_config(), scopes=SCOPES,
-                                         state=session["oauth_state"],
-                                         redirect_uri=url_for("auth_callback", _external=True))
-    flow.fetch_token(authorization_response=request.url)
-    creds = flow.credentials
-    session["yt_token"] = {
-        "token":         creds.token,
-        "refresh_token": creds.refresh_token,
-        "token_uri":     creds.token_uri,
-        "client_id":     creds.client_id,
-        "client_secret": creds.client_secret,
-        "scopes":        creds.scopes,
-    }
-    return redirect(url_for("index"))
-
-
-@app.route("/auth/status")
-def auth_status():
-    return jsonify({"connected": "yt_token" in session})
-
-
-@app.route("/auth/logout")
-def auth_logout():
-    session.pop("yt_token", None)
-    return jsonify({"ok": True})
-
-
-# ── Upload YouTube ────────────────────────────────────────────────────────────
-
-@app.route("/api/republish", methods=["POST"])
-def api_republish():
-    if "yt_token" not in session:
-        return jsonify({"error": "Non connecté à YouTube."}), 401
-
-    data = request.get_json(silent=True) or {}
-    url = data.get("url", "").strip()
-    title = data.get("title", "Vidéo republiée")
-    description = data.get("description", "")
-
-    platform = detect_platform(url)
-    if not platform:
-        return jsonify({"error": "URL non reconnue."}), 400
-
-    tmpdir = tempfile.mkdtemp()
-    try:
-        path = _yt_download(url, tmpdir) if platform == "youtube" else _ydl_download(url, tmpdir)
-
-        from google.oauth2.credentials import Credentials
-        creds = Credentials(**session["yt_token"])
-        youtube = build("youtube", "v3", credentials=creds)
-
-        body = {
-            "snippet": {
-                "title": title[:100],
-                "description": description,
-                "categoryId": "22",
-            },
-            "status": {"privacyStatus": "private"},
-        }
-        media = MediaFileUpload(path, mimetype="video/mp4", resumable=True)
-        insert_request = youtube.videos().insert(part="snippet,status", body=body, media_body=media)
-
-        response = None
-        while response is None:
-            _, response = insert_request.next_chunk()
-
-        return jsonify({"ok": True, "video_id": response["id"],
-                        "url": f"https://www.youtube.com/watch?v={response['id']}"})
-    except Exception as exc:
-        return jsonify({"error": str(exc)}), 500
-    finally:
-        _delayed_cleanup(tmpdir)
-
 
 if __name__ == "__main__":
-    os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"
     port = int(os.environ.get("PORT", 5001))
     app.run(debug=False, port=port)

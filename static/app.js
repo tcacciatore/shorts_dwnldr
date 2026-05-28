@@ -82,11 +82,9 @@ const platformTag    = document.getElementById("platformTag");
 const videoTitle     = document.getElementById("videoTitle");
 const videoUploader  = document.getElementById("videoUploader");
 const btnDownload      = document.getElementById("btnDownload");
-const btnRepublish     = document.getElementById("btnRepublish");
 const downloadProgress = document.getElementById("downloadProgress");
 const progressFill     = document.getElementById("progressFill");
 const progressLabel    = document.getElementById("progressLabel");
-const republishResult  = document.getElementById("republishResult");
 
 /* ── State ── */
 let currentUrl = "";
@@ -106,15 +104,8 @@ function resetPreview() {
   previewLoading.classList.add("hidden");
   previewContent.classList.add("hidden");
   downloadProgress.classList.add("hidden");
-  republishResult.classList.add("hidden");
   btnDownload.disabled = false;
   btnDownload.classList.remove("hidden");
-}
-
-async function checkYouTubeAuth() {
-  const res = await fetch("/auth/status");
-  const data = await res.json();
-  return data.connected;
 }
 
 function updateBadge(platform) {
@@ -243,44 +234,6 @@ btnPaste.addEventListener("click", async () => {
     urlInput.focus();
     document.execCommand("paste");
     setTimeout(() => onUrlChange(urlInput.value), 0);
-  }
-});
-
-/* ── Republish ── */
-btnRepublish.addEventListener("click", async () => {
-  if (!currentUrl) return;
-
-  const connected = await checkYouTubeAuth();
-  if (!connected) {
-    window.location.href = "/auth/login";
-    return;
-  }
-
-  btnRepublish.disabled = true;
-  republishResult.className = "republish-result";
-  republishResult.textContent = "Publication en cours…";
-  republishResult.classList.remove("hidden");
-
-  try {
-    const res = await fetch("/api/republish", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url: currentUrl, title: videoTitle.textContent }),
-    });
-    const data = await res.json();
-
-    if (data.error) {
-      republishResult.classList.add("error");
-      republishResult.textContent = data.error;
-    } else {
-      republishResult.classList.add("success");
-      republishResult.innerHTML = `Publié en privé sur YouTube — <a href="${data.url}" target="_blank" style="color:inherit">voir la vidéo</a>`;
-    }
-  } catch {
-    republishResult.classList.add("error");
-    republishResult.textContent = "Erreur de connexion au serveur.";
-  } finally {
-    btnRepublish.disabled = false;
   }
 });
 
