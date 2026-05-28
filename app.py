@@ -42,44 +42,6 @@ def _delayed_cleanup(path: str) -> None:
     threading.Timer(10.0, _do).start()
 
 
-# ── YouTube via pytubefix ────────────────────────────────────────────────────
-
-def _yt_info(url: str) -> dict:
-    from pytubefix import YouTube
-    yt = YouTube(url)
-    stream = yt.streams.filter(progressive=True, file_extension="mp4") \
-                       .order_by("resolution").last()
-    return {
-        "platform": "youtube",
-        "title": yt.title or "Sans titre",
-        "thumbnail": yt.thumbnail_url or "",
-        "duration": yt.length or 0,
-        "uploader": yt.author or "",
-    }
-
-
-def _yt_download(url: str, tmpdir: str) -> str:
-    from pytubefix import YouTube
-    yt = YouTube(url)
-    # Préférer la meilleure qualité progressive (audio+vidéo dans un seul fichier)
-    stream = yt.streams.filter(progressive=True, file_extension="mp4") \
-                       .order_by("resolution").last()
-    if not stream:
-        # Fallback : n'importe quel mp4
-        stream = yt.streams.filter(file_extension="mp4").order_by("resolution").last()
-    if not stream:
-        raise RuntimeError("Aucun flux MP4 disponible pour cette vidéo.")
-    path = stream.download(output_path=tmpdir)
-    # S'assurer que l'extension est .mp4
-    if not path.endswith(".mp4"):
-        new_path = os.path.splitext(path)[0] + ".mp4"
-        os.rename(path, new_path)
-        path = new_path
-    return path
-
-
-# ── Instagram / TikTok via yt-dlp ────────────────────────────────────────────
-
 def _ydl_opts(extra: dict = {}) -> dict:
     opts = {
         "quiet": True,
@@ -87,17 +49,25 @@ def _ydl_opts(extra: dict = {}) -> dict:
         "source_address": "0.0.0.0",
         **extra,
     }
-    # En local, on peut utiliser les cookies Chrome pour les sites qui requièrent une auth
     if os.environ.get("USE_BROWSER_COOKIES", "").lower() == "1":
         opts["cookiesfrombrowser"] = ("chrome",)
     return opts
 
 
-def _ydl_info(url: str) -> dict:
-    with yt_dlp.YoutubeDL(_ydl_opts({"skip_download": True})) as ydl:
+def _ydl_opts_youtube(extra: dict = {}) -> dict:
+    # Le client iOS contourne la détection de bot de YouTube
+    return _ydl_opts({
+        "extractor_args": {"youtube": {"player_client": ["ios"]}},
+        **extra,
+    })
+
+
+def _ydl_info(url: str, platform: str) -> dict:
+    base = _ydl_opts_youtube({"skip_download": True}) if platform == "youtube" else _ydl_opts({"skip_download": True})
+    with yt_dlp.YoutubeDL(base) as ydl:
         info = ydl.extract_info(url, download=False)
     return {
-        "platform": detect_platform(url),
+        "platform": platform,
         "title": info.get("title") or "Sans titre",
         "thumbnail": info.get("thumbnail") or "",
         "duration": info.get("duration") or 0,
@@ -105,13 +75,14 @@ def _ydl_info(url: str) -> dict:
     }
 
 
-def _ydl_download(url: str, tmpdir: str) -> str:
-    opts = _ydl_opts({
+def _ydl_download(url: str, tmpdir: str, platform: str) -> str:
+    format_opts = {
         "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
         "outtmpl": os.path.join(tmpdir, "%(title).100s.%(ext)s"),
         "merge_output_format": "mp4",
-    })
-    with yt_dlp.YoutubeDL(opts) as ydl:
+    }
+    base = _ydl_opts_youtube(format_opts) if platform == "youtube" else _ydl_opts(format_opts)
+    with yt_dlp.YoutubeDL(base) as ydl:
         info = ydl.extract_info(url, download=True)
         path = ydl.prepare_filename(info)
 
@@ -142,7 +113,7 @@ def api_info():
         return jsonify({"error": "URL non reconnue. Seuls YouTube Shorts, Instagram Reels et TikTok sont supportés."}), 400
 
     try:
-        result = _yt_info(url) if platform == "youtube" else _ydl_info(url)
+        result = _ydl_info(url, platform)
         return jsonify(result)
     except Exception as exc:
         return jsonify({"error": str(exc)}), 500
@@ -158,7 +129,7 @@ def api_download():
 
     tmpdir = tempfile.mkdtemp()
     try:
-        path = _yt_download(url, tmpdir) if platform == "youtube" else _ydl_download(url, tmpdir)
+        path = _ydl_download(url, tmpdir, platform)
 
         @after_this_request
         def cleanup(response):
